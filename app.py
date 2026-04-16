@@ -7,6 +7,7 @@ ZUID ClickUp Dashboards
 """
 
 import streamlit as st
+import hmac
 
 from api.clickup_client import ClickUpClient
 from dashboards import financial, hygiene, pm_board
@@ -17,6 +18,33 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+def _require_password() -> None:
+    """
+    Simple password gate.
+    Configure on Streamlit Cloud via Secrets: APP_PASSWORD = "..."
+    """
+    try:
+        expected = st.secrets.get("APP_PASSWORD", "")
+    except Exception:
+        expected = ""
+
+    # If no password is configured, do not block access.
+    if not expected:
+        return
+
+    if st.session_state.get("authenticated") is True:
+        return
+
+    st.sidebar.markdown("### 🔒 Login")
+    entered = st.sidebar.text_input("Wachtwoord", type="password", key="app_password")
+    if entered and hmac.compare_digest(str(entered), str(expected)):
+        st.session_state["authenticated"] = True
+        st.sidebar.success("Ingelogd")
+        return
+
+    st.sidebar.info("Voer het wachtwoord in om het dashboard te bekijken.")
+    st.stop()
 
 
 @st.cache_resource
@@ -30,6 +58,7 @@ def get_space_ids(_client: ClickUpClient) -> dict[str, str]:
 
 
 def main():
+    _require_password()
     client = get_client()
 
     with st.sidebar:
