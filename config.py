@@ -3,18 +3,36 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CLICKUP_API_TOKEN = os.getenv("CLICKUP_API_TOKEN", "")
-CLICKUP_TEAM_ID = os.getenv("CLICKUP_TEAM_ID", "")
+def _get_setting(key: str, default: str = "") -> str:
+    """
+    Prefer Streamlit Cloud secrets, then environment variables.
+    Keeps local `.env` working while making Streamlit Community Cloud reliable.
+    """
+    try:
+        import streamlit as st  # type: ignore
+
+        if hasattr(st, "secrets") and key in st.secrets:
+            val = st.secrets.get(key)
+            return str(val) if val is not None else default
+    except Exception:
+        # Streamlit not installed/importable in some contexts (e.g. tooling)
+        pass
+
+    return os.getenv(key, default)
+
+
+CLICKUP_API_TOKEN = _get_setting("CLICKUP_API_TOKEN", "")
+CLICKUP_TEAM_ID = _get_setting("CLICKUP_TEAM_ID", "")
 CLICKUP_BASE_URL = "https://api.clickup.com/api/v2"
 
-GRIPP_API_URL = os.getenv("GRIPP_API_URL", "")
-GRIPP_API_TOKEN = os.getenv("GRIPP_API_TOKEN", "")
+GRIPP_API_URL = _get_setting("GRIPP_API_URL", "")
+GRIPP_API_TOKEN = _get_setting("GRIPP_API_TOKEN", "")
 
 SPACE_IDS = {
-    "growth": os.getenv("SPACE_GROWTH_ID", ""),
-    "delivery": os.getenv("SPACE_DELIVERY_ID", ""),
-    "operations": os.getenv("SPACE_OPERATIONS_ID", ""),
-    "overview": os.getenv("SPACE_OVERVIEW_ID", ""),
+    "growth": _get_setting("SPACE_GROWTH_ID", ""),
+    "delivery": _get_setting("SPACE_DELIVERY_ID", ""),
+    "operations": _get_setting("SPACE_OPERATIONS_ID", ""),
+    "overview": _get_setting("SPACE_OVERVIEW_ID", ""),
 }
 
 ZUID_SPACES = ["Growth", "Delivery", "Operations", "Overview"]
