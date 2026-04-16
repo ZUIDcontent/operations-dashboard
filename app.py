@@ -44,7 +44,9 @@ def main():
         space_ids = get_space_ids(client)
     except Exception as e:
         st.error(f"Kan geen verbinding maken met ClickUp: {e}")
-        st.info("Controleer CLICKUP_API_TOKEN en CLICKUP_TEAM_ID in `.env`")
+        st.info(
+            "Controleer CLICKUP_API_TOKEN en CLICKUP_TEAM_ID in Streamlit Secrets (Cloud) of `.env` (lokaal)."
+        )
         return
 
     if not space_ids:
