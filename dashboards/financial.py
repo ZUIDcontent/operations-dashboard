@@ -45,6 +45,7 @@ def _build_project_records(
 ) -> list[dict]:
     records = []
     total = len(overview_projects)
+    failed_lists = 0
 
     for i, proj in enumerate(overview_projects):
         progress_bar.progress(
@@ -98,7 +99,7 @@ def _build_project_records(
 
                     task_count += 1
             except Exception:
-                pass
+                failed_lists += 1
 
         if geplande_waarde == 0 and sum_budget > 0:
             geplande_waarde = sum_budget
@@ -162,6 +163,16 @@ def render(client: ClickUpClient, space_ids: dict[str, str]):
     progress.empty()
 
     df = pd.DataFrame(records)
+
+    # If list/task loads fail (timeouts/rate limits), it can look like "missing data".
+    # Make it visible to the user instead of silently filtering everything out.
+    if "has_list" in df.columns:
+        failed_estimate = int((df["has_list"] == True).sum() - (df["task_count"] > 0).sum())  # noqa: E712
+        if failed_estimate > 0:
+            st.warning(
+                f"Let op: voor ongeveer {failed_estimate} project(en) konden taken niet volledig geladen worden "
+                "(timeouts/rate limits/permissies). Probeer opnieuw of verlaag 'Max projecten laden'."
+            )
 
     if only_with_value:
         df = df[df["opdrachtwaarde"] > 0]

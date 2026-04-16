@@ -24,18 +24,57 @@ class ClickUpClient:
         self._rate_limit_remaining = 100
 
     def _request(self, method: str, endpoint: str, params: dict | None = None) -> dict:
+        """
+        ClickUp API requests with basic rate-limit handling.
+
+        Streamlit Community Cloud is slower than local runs; without retries,
+        transient 429/5xx/timeouts can silently reduce loaded data upstream.
+        """
         if self._rate_limit_remaining < 5:
             time.sleep(1)
 
         url = f"{self.base_url}/{endpoint}"
-        response = requests.request(
-            method, url, headers=self.headers, params=params, timeout=30
-        )
-        self._rate_limit_remaining = int(
-            response.headers.get("X-RateLimit-Remaining", 100)
-        )
-        response.raise_for_status()
-        return response.json()
+        last_exc: Exception | None = None
+
+        for attempt in range(1, 6):  # max 5 attempts
+            try:
+                response = requests.request(
+                    method, url, headers=self.headers, params=params, timeout=30
+                )
+
+                # Track remaining if present
+                try:
+                    self._rate_limit_remaining = int(
+                        response.headers.get("X-RateLimit-Remaining", 100)
+                    )
+                except Exception:
+                    self._rate_limit_remaining = 100
+
+                # Handle rate limit
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    sleep_s = float(retry_after) if retry_after else min(8.0, 1.5**attempt)
+                    time.sleep(sleep_s)
+                    continue
+
+                # Retry transient server errors
+                if 500 <= response.status_code < 600:
+                    time.sleep(min(8.0, 1.5**attempt))
+                    continue
+
+                response.raise_for_status()
+                return response.json()
+            except (requests.Timeout, requests.ConnectionError) as e:
+                last_exc = e
+                time.sleep(min(8.0, 1.5**attempt))
+                continue
+            except Exception as e:
+                # Non-transient error; bubble up (auth/400/etc)
+                raise
+
+        if last_exc:
+            raise last_exc
+        raise RuntimeError(f"ClickUp request failed after retries: {method} {url}")
 
     def _get(self, endpoint: str, params: dict | None = None) -> dict:
         return self._request("GET", endpoint, params=params)
