@@ -174,6 +174,28 @@ def render(client: ClickUpClient, space_ids: dict[str, str]):
                 "(timeouts/rate limits/permissies). Probeer opnieuw of verlaag 'Max projecten laden'."
             )
 
+    with st.expander("🔎 Diagnostics (als data ontbreekt)", expanded=False):
+        if df.empty:
+            st.write("Geen records opgebouwd.")
+        else:
+            st.write(
+                {
+                    "projects_loaded": int(len(df)),
+                    "with_list_link": int(df["has_list"].sum()) if "has_list" in df.columns else None,
+                    "with_tasks_loaded": int((df["task_count"] > 0).sum()) if "task_count" in df.columns else None,
+                    "opdrachtwaarde_zero": int((df["opdrachtwaarde"] <= 0).sum()) if "opdrachtwaarde" in df.columns else None,
+                    "geplande_waarde_zero": int((df["geplande_waarde"] <= 0).sum()) if "geplande_waarde" in df.columns else None,
+                }
+            )
+            # show a few suspicious rows (often the reason for "no overschrijding")
+            cols = ["project", "client", "opdrachtwaarde", "geplande_waarde", "task_count", "has_list"]
+            cols = [c for c in cols if c in df.columns]
+            suspect = df.copy()
+            if "opdrachtwaarde" in suspect.columns:
+                suspect = suspect[suspect["opdrachtwaarde"] <= 0]
+            st.write("Voorbeeld projecten met opdrachtwaarde = 0 (eerste 20):")
+            st.dataframe(suspect[cols].head(20), hide_index=True, use_container_width=True)
+
     if only_with_value:
         df = df[df["opdrachtwaarde"] > 0]
     if only_active:
