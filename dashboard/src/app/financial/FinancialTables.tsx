@@ -33,6 +33,11 @@ interface ExpectedRow {
   [key: string]: unknown;
 }
 
+interface ExpectedBulkApprovalItem {
+  projectId: string;
+  approvedExpected: number;
+}
+
 interface EditDraft {
   signedOfferValue: string;
   vendorCosts: string;
@@ -157,20 +162,22 @@ type ExpectedApprovalState = "none" | "valid" | "exceeded";
 
 function ExpectedApprovalSection({
   row, approval, thresholdValue, onThresholdChange,
-  onApprove, onRevoke, saving, msg,
+  onApprove, onApproveCurrent, onRevoke, saving, msg,
 }: {
   row: ExpectedRow;
   approval: { at: string; approvedExpected: number; threshold: number } | null;
   thresholdValue: string;
   onThresholdChange: (v: string) => void;
   onApprove: () => void;
+  onApproveCurrent: () => void;
   onRevoke: () => void;
   saving: boolean;
   msg: string | null;
 }) {
+  const approvedCeiling = approval ? approval.approvedExpected + approval.threshold : 0;
   const state: ExpectedApprovalState = !approval
     ? "none"
-    : row.overshoot <= approval.threshold ? "valid" : "exceeded";
+    : row.expectedBudget <= approvedCeiling ? "valid" : "exceeded";
 
   function quickSet(fraction: number) {
     onThresholdChange(String(Math.round(row.expectedBudget * fraction)));
@@ -183,7 +190,7 @@ function ExpectedApprovalSection({
       {state === "valid" && approval && (
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 font-medium">
-            ✓ Akkoord tot {eur(approval.approvedExpected + approval.threshold)} ({eur(approval.approvedExpected)} + {eur(approval.threshold)})
+            ✓ Akkoord tot {eur(approvedCeiling)} ({eur(approval.approvedExpected)} + {eur(approval.threshold)})
           </span>
           <span className="text-xs text-gray-400">{new Date(approval.at).toLocaleDateString("nl-NL")}</span>
           <button type="button" onClick={onRevoke}
@@ -197,7 +204,7 @@ function ExpectedApprovalSection({
         <div className="flex flex-wrap items-end gap-2">
           {state === "exceeded" && approval && (
             <div className="w-full text-xs text-red-600 bg-red-50 px-3 py-2 rounded-lg mb-1">
-              ⚠ Drempel overschreden — akkoord was tot {eur(approval.approvedExpected + approval.threshold)}, huidig expected {eur(row.expectedBudget)} — nieuw akkoord vereist
+              ⚠ Drempel overschreden — akkoord was tot {eur(approvedCeiling)}, huidig expected {eur(row.expectedBudget)} — nieuw akkoord vereist
             </div>
           )}
           <div className="flex-shrink-0">
@@ -224,6 +231,14 @@ function ExpectedApprovalSection({
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
               Akkoord geven
             </button>
+            <button
+              type="button"
+              onClick={onApproveCurrent}
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 h-8"
+            >
+              Akkoord huidig overschot
+            </button>
             {msg && (
               <span className={`text-xs font-medium ${msg.startsWith("Fout") ? "text-red-600" : "text-emerald-600"}`}>{msg}</span>
             )}
@@ -238,7 +253,7 @@ function ExpectedApprovalSection({
 
 export default function FinancialTables({
   burnRows, expectedRows, missingRows, approvals,
-  onPmAllow, onPmExpectedApprove, onPmExpectedRevoke,
+  onPmAllow, onPmExpectedApprove, onPmExpectedApproveBulk, onPmExpectedRevoke,
 }: {
   burnRows: BurnRow[];
   expectedRows: ExpectedRow[];
@@ -246,6 +261,7 @@ export default function FinancialTables({
   approvals: Approvals;
   onPmAllow: (projectId: string) => void;
   onPmExpectedApprove: (projectId: string, threshold: number, approvedExpected: number) => void;
+  onPmExpectedApproveBulk: (items: ExpectedBulkApprovalItem[]) => Promise<void>;
   onPmExpectedRevoke: (projectId: string) => void;
 }) {
   const [loadingPm, setLoadingPm] = useState<string | null>(null);
@@ -265,6 +281,7 @@ export default function FinancialTables({
   const [thresholdDrafts, setThresholdDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<Record<string, string>>({});
+  const [bulkMsg, setBulkMsg] = useState<string | null>(null);
 
   // Map missing rows by id for budget editing
   const missingMap = Object.fromEntries(missingRows.map((p) => [p.id, p]));
@@ -355,11 +372,45 @@ export default function FinancialTables({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thresholdDrafts, onPmExpectedApprove]);
 
+  const handleExpectedApproveCurrent = useCallback(async (row: ExpectedRow) => {
+    setSaving(row.id);
+    try {
+      // Akkoord only for current overshoot; retrigger zodra expected verder stijgt.
+      onPmExpectedApprove(row.id, 0, row.expectedBudget);
+      setMsg(row.id, "✓ Akkoord op huidig overschot");
+    } catch (e) {
+      setMsg(row.id, `Fout: ${e instanceof Error ? e.message : "onbekend"}`);
+    }
+    setSaving(null);
+  }, [onPmExpectedApprove]);
+
   const handleExpectedRevoke = useCallback(async (projectId: string) => {
     onPmExpectedRevoke(projectId);
     setMsg(projectId, "✓ Akkoord ingetrokken");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onPmExpectedRevoke]);
+
+  const handleExpectedApproveCurrentBulk = useCallback(async () => {
+    const items = expectedRows
+      .filter((row) => expectedApprovalState(row) !== "valid")
+      .map((row) => ({ projectId: row.id, approvedExpected: row.expectedBudget }));
+
+    if (items.length === 0) {
+      setBulkMsg("Geen projecten die akkoord vereisen");
+      setTimeout(() => setBulkMsg(null), 3000);
+      return;
+    }
+
+    setSaving("__bulk_expected_current__");
+    try {
+      await onPmExpectedApproveBulk(items);
+      setBulkMsg(`✓ Akkoord op huidig overschot voor ${items.length} project${items.length === 1 ? "" : "en"}`);
+    } catch (e) {
+      setBulkMsg(`Fout: ${e instanceof Error ? e.message : "bulk akkoord mislukt"}`);
+    }
+    setSaving(null);
+    setTimeout(() => setBulkMsg(null), 4000);
+  }, [expectedRows, onPmExpectedApproveBulk]);
 
   // ── expand content builders ───────────────────────────────
 
@@ -401,6 +452,7 @@ export default function FinancialTables({
             thresholdValue={thresholdDrafts[row.id] ?? ""}
             onThresholdChange={(v) => setThresholdDrafts((prev) => ({ ...prev, [row.id]: v }))}
             onApprove={() => handleExpectedApprove(row)}
+            onApproveCurrent={() => handleExpectedApproveCurrent(row)}
             onRevoke={() => handleExpectedRevoke(row.id)}
             saving={saving === row.id}
             msg={saveMsg[row.id] ?? null}
@@ -608,11 +660,23 @@ export default function FinancialTables({
           open={openExpected}
           onToggle={() => setOpenExpected((v) => !v)}
         >
-          <button type="button"
-            onClick={(e) => { e.stopPropagation(); setShowApprovedExpected((v) => !v); }}
-            className="ml-2 text-xs px-2 py-1 rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50">
-            {showApprovedExpected ? "Verberg geaccordeerd" : "Toon geaccordeerd"}
-          </button>
+          <div className="ml-2 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={handleExpectedApproveCurrentBulk}
+              disabled={expectedNeedsAttention === 0 || saving === "__bulk_expected_current__"}
+              className="text-xs px-2 py-1 rounded border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              {saving === "__bulk_expected_current__" ? "Bezig..." : "Bulk: akkoord huidig overschot"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowApprovedExpected((v) => !v)}
+              className="text-xs px-2 py-1 rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+            >
+              {showApprovedExpected ? "Verberg geaccordeerd" : "Toon geaccordeerd"}
+            </button>
+          </div>
         </SectionHeader>
 
         {openExpected && (
@@ -620,6 +684,11 @@ export default function FinancialTables({
             <p className="text-sm text-gray-500 mb-4 mt-1">
               Klik een rij om PM-akkoord te geven voor de overschrijding. Geef een drempel op — zodra de overschrijding die drempel overstijgt komt het project automatisch terug.
             </p>
+            {bulkMsg && (
+              <p className={`text-sm mb-3 ${bulkMsg.startsWith("Fout") ? "text-red-600" : "text-emerald-600"}`}>
+                {bulkMsg}
+              </p>
+            )}
             {expectedVisible.length === 0 ? (
               <div className="bg-emerald-50 text-emerald-800 text-sm px-4 py-3 rounded-lg">
                 Geen projecten met overschrijding of ontbrekende gegevens.
